@@ -1,0 +1,677 @@
+GitLab Environment Toolkit – Terraform Deployment Notes
+Created by: nirupa bj
+Last updated: June 18, 2026
+Estimated reading time: 5 minutes
+
+GitLab Repository Details
+Test
+Repository: gitlab-environment-toolkit-internal
+
+Repository URL:
+https://dot-test.de.pri.o2.com/gitlab/extern/ALM/gitlab-environment-toolkit-internal.git
+
+Pipeline:
+https://dot-test.de.pri.o2.com/gitlab/extern/ALM/gitlab-environment-toolkit-internal/-/jobs/23088
+
+Runner Address:
+
+ip-10-170-38-140
+
+Test Repository Structure
+├── .gitlab-ci.yml
+├── README.md
+└── terraform
+    ├── environments
+    │   └── test
+    │       ├── main.tf
+    │       └── variables.tf
+    │
+    └── modules
+        ├── gitlab_aws_instance
+        │   ├── data_disks.tf
+        │   ├── main.tf
+        │   ├── outputs.tf
+        │   └── variables.tf
+        │
+        ├── gitlab_aws_vpc_peering
+        │   ├── main.tf
+        │   ├── outputs.tf
+        │   └── variables.tf
+        │
+        └── gitlab_ref_arch_aws
+            ├── main.tf
+            ├── gitaly.tf
+            ├── gitlab_rails.tf
+            └── praefect.tf
+
+Prod
+Repository: gitlab-environment-toolkit-env
+
+Repository URL:
+https://dot-portal.de.pri.o2.com/gitlab/extern/ALM/gitlab-environment-toolkit-env.git
+
+Pipeline:
+No pipeline is currently created in Prod.
+
+Prod Repository Structure
+terraform
+├── environments
+│   └── test
+│       ├── main.tf
+│       └── variables.tf
+│
+└── modules
+   ├── gitlab_aws_instance
+   │   ├── data_disks.tf
+   │   ├── main.tf
+   │   ├── outputs.tf
+   │   └── variables.tf
+   │
+   ├── gitlab_aws_vpc_peering
+   │   ├── main.tf
+   │   ├── outputs.tf
+   │   └── variables.tf
+   │
+   └── gitlab_ref_arch_aws
+       ├── gitaly.tf
+       ├── gitlab_rails.tf
+       ├── main.tf
+       └── praefect.tf
+
+1. High-Level Overview
+This repository follows a modular Terraform design where:
+
+Environments layer → Defines environment-specific configurations such as test, dev, and prod.
+Modules layer → Contains reusable infrastructure components such as VPC, EC2, and GitLab architecture.
+This approach enables:
+
+Reusability
+Scalability
+Environment isolation
+Consistent infrastructure provisioning
+2. Repository Structure Explanation
+Root Level
+.gitlab-ci.yml
+terraform/
+
+.gitlab-ci.yml
+The .gitlab-ci.yml file defines the CI/CD pipeline used to run Terraform commands:
+
+terraform init
+terraform validate
+terraform plan
+terraform apply
+
+Terraform Apply – Manual Execution
+terraform apply has intentionally been configured as a manual step.
+
+Making terraform apply manual helps to:
+
+Prevent accidental infrastructure changes.
+Ensure the Terraform plan is reviewed before execution.
+Provide an audit trail showing who triggered the apply.
+Add a safety gate before making real infrastructure changes.
+3. terraform/environments/
+The environments directory contains environment-specific Terraform configurations.
+
+terraform/environments/
+├── README.md
+└── test/
+    ├── main.tf
+    └── variables.tf
+
+Purpose
+This layer contains configuration specific to each environment, for example:
+
+test
+dev
+prod
+
+When running Terraform code for provisioning resources in the test environment, ensure you are in the correct directory:
+
+cd terraform/environments/test
+
+Then execute the required Terraform commands.
+
+main.tf
+The environment main.tf calls the reusable Terraform module.
+
+Example:
+
+module "gitlab" {
+  source = "../../modules/gitlab_ref_arch_aws"
+
+  # variables passed here
+}
+
+The environment-specific values are passed from the environment configuration into the reusable module.
+
+variables.tf
+variables.tf defines environment inputs such as:
+
+VPC ID
+Subnet IDs
+AMI ID
+Instance type
+Key pair
+Security groups
+Additional infrastructure-related values include:
+
+IAM roles
+Tags
+RDS instance type
+KMS policy
+S3 bucket names
+ElastiCache configuration
+4. terraform/modules/
+terraform/modules/
+├── gitlab_aws_instance
+├── gitlab_aws_vpc_peering
+└── gitlab_ref_arch_aws
+
+Purpose
+The modules directory contains reusable Terraform modules.
+
+Each module represents a specific infrastructure component.
+
+The modules are called from:
+
+terraform/environments/<environment>/main.tf
+
+5. Core Module: gitlab_ref_arch_aws
+The gitlab_ref_arch_aws module implements the GitLab Reference Architecture on AWS.
+
+Structure:
+
+gitlab_ref_arch_aws/
+├── main.tf
+├── gitaly.tf
+├── gitlab_rails.tf
+└── praefect.tf
+
+Purpose
+This module implements the GitLab Reference Architecture on AWS.
+
+The module is responsible for provisioning the core GitLab infrastructure components, including:
+
+GitLab Rails nodes
+Gitaly nodes
+Praefect nodes
+Supporting infrastructure
+EC2 resources
+Security groups and related configuration
+6. Flow of Execution
+The Terraform deployment flow is:
+
+User
+  |
+  v
+GitLab Pipeline / Terraform CLI
+  |
+  v
+terraform/environments/test
+  |
+  v
+main.tf
+  |
+  v
+modules/gitlab_ref_arch_aws
+  |
+  +--> GitLab Rails nodes
+  |
+  +--> Gitaly nodes
+  |
+  +--> Praefect nodes
+  |
+  +--> Supporting infrastructure
+  |
+  v
+AWS Infrastructure
+
+Step-by-step:
+
+User runs the pipeline or Terraform commands.
+
+Terraform is executed from:
+
+terraform/environments/test
+
+main.tf calls:
+
+modules/gitlab_ref_arch_aws
+
+The module internally provisions:
+
+Rails nodes
+Gitaly nodes
+Praefect nodes
+Supporting infrastructure
+EC2 resources
+Security groups and other required infrastructure
+Variables are passed from:
+
+environments/test/variables.tf
+
+7. Where You Need to Update
+For environment-specific configuration, update:
+
+terraform/environments/test/variables.tf
+terraform/environments/test/main.tf
+
+Provide the required values, including:
+
+VPC ID
+Subnet IDs
+Security groups
+AMI ID
+Instance type
+Key pair
+IAM roles
+Tags
+RDS instance type
+KMS policy
+S3 bucket name
+ElastiCache configuration
+8. Key Concept Summary
+Component	Purpose
+environments	Environment-specific configurations
+modules	Reusable infrastructure components
+gitlab_ref_arch_aws	Complete GitLab architecture
+variables.tf	Defines Terraform inputs
+main.tf	Module invocation and infrastructure configuration
+.gitlab-ci.yml	GitLab CI/CD Terraform pipeline
+
+9. Terraform Deployment Troubleshooting Notes
+Environment
+Terraform deployment path:
+
+/home/ec2-user/nirupa/gitlab-environment-toolkit/terraform/environments/test
+
+AWS Region:
+
+eu-central-1
+
+Target module:
+
+gitlab_ref_arch_aws
+
+Initial Error
+Terraform apply initially failed with:
+
+Error: collecting instance settings: empty result
+
+Resource
+module.gitlab_ref_arch_aws.module.gitlab_rails.aws_instance.gitlab[0]
+
+File
+../../modules/gitlab_aws_instance/main.tf
+
+Line
+resource "aws_instance" "gitlab"
+
+10. Troubleshooting Step 1 – Verify Terraform Subnet Variables
+The Terraform console was used:
+
+terraform console
+
+The following variable was checked:
+
+var.subnet_ids
+
+Result:
+
+[
+  "subnet-0a439e2f38281a5ce",
+  "subnet-01b3f4a3103d4abdb",
+]
+
+Conclusion
+The subnet variables were correctly populated.
+
+11. Troubleshooting Step 2 – Verify Existing VPC Configuration
+The VPC variable was verified:
+
+var.vpc_id
+
+Result:
+
+vpc-0f50ef3958aa891fb
+
+Conclusion
+Terraform was using the intended existing VPC.
+
+12. Troubleshooting Step 3 – Verify Security Groups
+The security group configuration was checked:
+
+var.security_group_ids
+
+Result:
+
+[
+  "sg-0cdb4a43820619cfd"
+]
+
+AWS CLI was then used to verify that the security group existed.
+
+Conclusion
+The security group configuration was valid.
+
+13. Troubleshooting Step 4 – Verify Subnet Existence
+The following AWS CLI command was executed:
+
+aws ec2 describe-subnets \
+  --subnet-ids subnet-0a439e2f38281a5ce subnet-01b3f4a3103d4abdb \
+  --region eu-central-1
+
+Conclusion
+The subnets:
+
+subnet-0a439e2f38281a5ce
+subnet-01b3f4a3103d4abdb
+
+existed and belonged to the correct VPC.
+
+14. Troubleshooting Step 5 – AMI Issue Identified
+Root Cause
+The Terraform AMI variable was checked:
+
+var.ami_id
+
+Result:
+
+ami-068ce9ce73029fefc
+
+The AMI was then verified using:
+
+aws ec2 describe-images \
+  --image-ids ami-068ce9ce73029fefc \
+  --region eu-central-1
+
+Result:
+
+{
+  "Images": []
+}
+
+Conclusion
+The AMI:
+
+ami-068ce9ce73029fefc
+
+did not exist in:
+
+eu-central-1
+
+This was the root cause of:
+
+Error: collecting instance settings: empty result
+
+15. Fix Applied
+Step 1 – Retrieve a Valid Ubuntu AMI
+The following AWS CLI command was used to retrieve valid Ubuntu AMIs:
+
+aws ec2 describe-images \
+  --owners 099720109477 \
+  --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*" \
+  --query 'Images[*].[ImageId,Name]' \
+  --region eu-central-1 \
+  --output table
+
+The selected valid AMI was:
+
+ami-0b9870706bef68b28
+
+Step 2 – Update Terraform Configuration
+The AMI configuration was updated:
+
+ami_id = "ami-0b9870706bef68b28"
+
+The following option was also enabled:
+
+use_existing_vpc = true
+
+16. Successful Deployment
+The Terraform plan was applied using:
+
+terraform apply tfplan
+
+Result:
+
+Apply complete! Resources: 1 added, 0 changed, 0 destroyed.
+
+Created EC2 Instance
+Instance ID:
+
+i-0b36780c321f9e8a9
+
+Private IP:
+
+10.110.96.255
+
+Hostname:
+
+ip-10-110-96-255.eu-central-1.compute.internal
+
+17. Post-Deployment SSH Issue
+The initial SSH attempt was:
+
+ssh -i atlassian-test.pem ec2-user@10.110.96.255
+
+The following error was received:
+
+Permission denied (publickey)
+
+Reason
+The incorrect default SSH username was used.
+
+The deployed AMI is:
+
+Ubuntu 24.04
+
+Ubuntu uses:
+
+ubuntu
+
+as the default SSH username rather than:
+
+ec2-user
+
+Correct SSH Command
+ssh -i atlassian-test.pem ubuntu@10.110.96.255
+
+18. Terraform Plan Preview of Additional Resources
+The Terraform plan also included provisioning for:
+
+RDS
+S3
+ElastiCache / Redis
+The plan preview covered the resources required for these AWS services.
+
+19. S3 Buckets
+S3 buckets were included in the Terraform infrastructure provisioning.
+
+The required S3 bucket names/configuration are maintained through the environment-specific Terraform configuration.
+
+20. ElastiCache
+ElastiCache was included in the Terraform infrastructure provisioning.
+
+The ElastiCache configuration represents the Redis component required by the infrastructure.
+
+21. RDS
+RDS was provisioned using Terraform.
+
+The RDS instance configuration is maintained through the Terraform environment/module configuration.
+
+22. User Stories
+DOT-6496 – EC2 Provisioning
+User Story:
+
+Purpose:
+EC2 provisioning
+
+This story covers the provisioning of the EC2 infrastructure used as part of the GitLab environment.
+
+DOT-6500 – Supporting AWS Services
+User Story:
+Purpose:
+
+Provisioning of:
+RDS
+S3
+ElastiCache (Redis)
+23. Key Learnings
+Invalid AMI IDs Can Cause Generic Terraform Errors
+The Terraform error:
+
+Error: collecting instance settings: empty result
+
+can be caused by an invalid or unavailable AMI ID.
+
+Always validate the AMI before deployment:
+
+aws ec2 describe-images \
+  --image-ids <AMI_ID> \
+  --region <AWS_REGION>
+
+For example:
+
+aws ec2 describe-images \
+  --image-ids ami-0b9870706bef68b28 \
+  --region eu-central-1
+
+Existing VPC Deployments
+When deploying into an existing VPC, ensure:
+
+use_existing_vpc = true
+
+is configured where required.
+
+Also verify:
+
+VPC ID
+Subnet IDs
+Security group IDs
+AWS region
+Ubuntu AMI SSH Username
+For Ubuntu AMIs, the default SSH username is:
+
+ubuntu
+
+Example:
+
+ssh -i <key.pem> ubuntu@<private-ip>
+
+Do not use:
+
+ec2-user
+
+for Ubuntu unless the image has been specifically configured with that user.
+
+AWS Provider Errors
+AWS provider errors can sometimes hide the actual EC2 validation failure.
+
+When an error such as:
+
+collecting instance settings: empty result
+
+occurs, validate the underlying AWS resources independently using the AWS CLI.
+
+Recommended checks include:
+
+AMI
+VPC
+Subnet
+Security Group
+Key Pair
+IAM Role
+Region
+
+24. Recommended Terraform Deployment Checklist
+Before applying Terraform, verify:
+
+ Correct environment directory is being used.
+ Correct AWS region is configured.
+ VPC ID exists.
+ Subnet IDs exist.
+ Subnets belong to the intended VPC.
+ Security groups exist.
+ AMI exists in the selected AWS region.
+ AMI is compatible with the intended instance configuration.
+ Correct instance type is configured.
+ Correct key pair is configured.
+ IAM roles are available.
+ Required tags are configured.
+ RDS configuration is correct.
+ KMS policy is correct.
+ S3 bucket names are correct.
+ ElastiCache/Redis configuration is correct.
+ terraform validate succeeds.
+ terraform plan has been reviewed.
+ terraform apply is triggered manually after plan review.
+25. Quick Reference
+Item	Value
+Test Repository	gitlab-environment-toolkit-internal
+Prod Repository	gitlab-environment-toolkit-env
+AWS Region	eu-central-1
+Target Module	gitlab_ref_arch_aws
+Test Runner	ip-10-170-38-140
+VPC	vpc-0f50ef3958aa891fb
+Subnet 1	subnet-0a439e2f38281a5ce
+Subnet 2	subnet-01b3f4a3103d4abdb
+Security Group	sg-0cdb4a43820619cfd
+Invalid AMI	ami-068ce9ce73029fefc
+Valid Ubuntu AMI	ami-0b9870706bef68b28
+EC2 Instance	i-0b36780c321f9e8a9
+EC2 Private IP	10.110.96.255
+EC2 Hostname	ip-10-110-96-255.eu-central-1.compute.internal
+Ubuntu SSH User	ubuntu
+EC2 User Story	DOT-6496
+RDS/S3/ElastiCache User Story	DOT-6500
+
+26. Overall Architecture Summary
+The repository uses a layered Terraform architecture:
+
+                    GitLab Repository
+                           |
+                           v
+                    .gitlab-ci.yml
+                           |
+                           v
+              Terraform Environment Layer
+                           |
+                  terraform/environments
+                           |
+                           v
+                     main.tf
+                           |
+                           v
+                 Reusable Modules Layer
+                           |
+             +-------------+-------------+
+             |             |             |
+             v             v             v
+       AWS Instance    VPC Peering   GitLab Reference
+                                       Architecture
+                                             |
+                           +-----------------+-----------------+
+                           |                 |                 |
+                           v                 v                 v
+                     GitLab Rails         Gitaly           Praefect
+                           |
+                           v
+                  Supporting AWS Services
+                           |
+              +------------+------------+
+              |            |            |
+              v            v            v
+             RDS          S3       ElastiCache
+                                      (Redis)
+
+The overall design separates environment-specific configuration from reusable infrastructure modules, allowing the same Terraform modules to be reused across different environments while keeping environment-specific values isolated.
+
+The Terraform pipeline provides validation and planning automatically, while terraform apply remains a manual safety gate to prevent unintended infrastructure changes.
+
+This is ready to use as the repository’s README.md. I’ve kept the technical details and troubleshooting history intact rather than condensing them away.
+
+
+
