@@ -1,0 +1,687 @@
+GitLab MCP Server – OAuth, ALB Workaround and AI Client Integration
+Created by: nirupa bj
+Last updated by: Nazia Mazhar
+Last updated: July 31, 2026
+Estimated reading time: 5 minutes
+
+1. Overview
+This document describes the workaround required to enable the GitLab MCP Server integration with external AI clients such as:
+
+Claude Desktop
+Claude Code
+GitHub Copilot in VS Code
+Potentially other MCP-compatible AI clients
+The workaround was suggested by GitLab Support because the MCP/OAuth discovery endpoints required by external AI clients were not being correctly routed when GitLab was hosted under the /gitlab subpath behind the Application Load Balancer (ALB).
+
+The affected OAuth discovery endpoints are:
+
+/.well-known/oauth-authorization-server
+/.well-known/oauth-protected-resource
+
+Because GitLab is hosted under:
+
+/gitlab
+
+the requests need to be rewritten to the corresponding /gitlab/.well-known/... paths.
+
+2. GitLab Support Workaround
+GitLab Support suggested adding NGINX rewrite rules to the GitLab Rails configuration.
+
+The workaround consists of two changes:
+
+Update the Production GitLab Rails gitlab.rb configuration.
+Add the required /.well-known paths to the GitLab ALB listener rules.
+3. Step 1 – Update gitlab.rb
+Update the gitlab.rb configuration on the Production GitLab Rails servers.
+
+Add the following configuration:
+
+# Workaround for GitLab Support ticket #728398
+nginx['custom_gitlab_server_config'] = <<~NGINX
+rewrite ^(/.well-known/oauth-authorization-server)$ /gitlab$1 last;
+rewrite ^(/.well-known/oauth-protected-resource)$ /gitlab$1 last;
+NGINX
+
+Purpose of the Rewrite Rules
+The rewrite rules ensure that requests to:
+
+/.well-known/oauth-authorization-server
+
+are internally redirected to:
+
+/gitlab/.well-known/oauth-authorization-server
+
+Similarly:
+
+/.well-known/oauth-protected-resource
+
+is redirected to:
+
+/gitlab/.well-known/oauth-protected-resource
+
+This is required because the GitLab instance is hosted under the /gitlab subpath.
+
+4. Apply the Configuration on GitLab Rails Servers
+After updating gitlab.rb, apply the configuration on both Production GitLab Rails servers.
+
+Run:
+
+gitlab-ctl reconfigure
+
+The command must be executed on both Rails servers to ensure the configuration is applied consistently.
+
+5. Step 2 – Update ALB Listener Rules
+The GitLab Application Load Balancer (ALB) listener rules must also be updated.
+
+Add the following paths:
+
+/.well-known
+/.well-known/*
+
+These listener rules allow the OAuth/MCP discovery requests to reach the GitLab infrastructure correctly.
+
+Required ALB Paths
+Path	Purpose
+/.well-known	Handles the .well-known discovery path
+/.well-known/*	Handles the OAuth discovery endpoints below .well-known
+
+The relevant OAuth endpoints are:
+
+/.well-known/oauth-authorization-server
+/.well-known/oauth-protected-resource
+
+6. MCP Testing with AI Clients
+After the Rails NGINX configuration and ALB listener rules are updated, the GitLab MCP Server can be tested with AI clients.
+
+The following use cases have been tested/documented:
+
+Claude Desktop
+GitHub Copilot in VS Code
+7. Use Case 1 – Connect Claude Desktop with GitLab MCP Server
+Prerequisites
+Before configuring Claude Desktop, ensure that:
+
+Node.js version 20 or later is installed.
+Node.js is available globally in the PATH environment variable.
+node can be found using:
+which -a node
+
+8. Configure GitLab MCP Server in Claude Desktop
+Open Claude Desktop.
+
+Edit the Claude Desktop configuration using either of the following methods.
+
+Option 1 – Claude Desktop Settings
+Navigate to:
+
+Settings > Developer > Edit Config
+
+Option 2 – macOS Configuration File
+On macOS, open:
+
+~/Library/Application Support/Claude/claude_desktop_config.json
+
+9. Add the GitLab MCP Server Configuration
+Add the following configuration:
+
+{
+  "mcpServers": {
+    "GitLab": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "mcp-remote",
+        "https://dot-portal.de.pri.o2.com/gitlab/api/v4/mcp"
+      ]
+    }
+  }
+}
+
+If npx is installed locally instead of globally, provide the full path to npx in the command parameter.
+
+For example, instead of:
+
+"command": "npx"
+
+use the full path to the executable where required.
+
+10. Save and Restart Claude Desktop
+After adding the configuration:
+
+Save the configuration file.
+Restart Claude Desktop.
+On the first connection, Claude Desktop should open a browser window for OAuth authentication.
+Review the authorization request.
+Approve the request.
+11. Verify the Claude MCP Connection
+After authentication:
+
+Navigate to:
+
+Settings > Developer
+
+Verify that the new GitLab MCP configuration is present.
+
+Then navigate to:
+
+Settings > Connectors
+
+and inspect the connected GitLab MCP server.
+
+Once connected, start a new chat and ask questions based on the available MCP tools.
+
+12. Available GitLab MCP Tools
+The following MCP tools are available through the integration:
+
+get_mcp_server_version
+create_issue
+get_issue
+create_merge_request
+get_merge_request
+get_merge_request_commits
+get_merge_request_diffs
+get_merge_request_pipelines
+create_merge_request_note
+get_merge_request_notes
+get_pipeline_jobs
+get_job_log
+manage_pipeline
+create_workitem_note
+get_workitem_notes
+link_work_items
+get_saved_view_work_items
+search
+search_labels
+list_wiki_pages
+semantic_code_search
+attach_scan_profile
+
+13. After Integrating Claude Desktop with GitLab MCP
+The integration flow is:
+
+AI Client
+   |
+   | Configure MCP Server
+   v
+MCP Configuration
+   |
+   | Save
+   v
+Browser OAuth Authentication
+   |
+   | Authorize
+   v
+GitLab OAuth
+   |
+   v
+Claude Desktop
+   |
+   v
+GitLab MCP Server
+   |
+   v
+GitLab API
+
+First, set up the integration.
+
+In the AI client, such as Claude or Cursor, configure the MCP server in the settings file and add the GitLab MCP entry under MCP & Integrations.
+
+Then:
+
+SAVE
+
+Once the configuration is saved, you will be redirected to the browser to authenticate through OAuth 2.0.
+
+After granting access:
+
+Authorize
+
+Claude is securely connected to GitLab and can access the available GitLab MCP tools.
+
+14. Verify GitLab MCP Server Version
+Once the connection has been established, verify which version of the GitLab MCP server is being used.
+
+In Claude, enter:
+
+What version of the GitLab MCP server am I connected to?
+
+Claude calls:
+
+get_mcp_server_version
+
+and returns the connected MCP server version.
+
+The tested result was:
+
+18.11.4-ee
+
+This confirms that:
+
+OAuth authentication is working.
+Claude is connected to the GitLab MCP server.
+The MCP server is responding.
+The MCP integration is ready for use.
+15. Testing GitLab MCP Functionality
+Once connected, GitLab information can be accessed directly from the AI client.
+
+For example, developers can retrieve issue information without leaving the AI client/editor.
+
+The MCP integration provides context-rich GitLab information through the available tools.
+
+16. Create an Issue in a GitLab Project
+The MCP integration can also be used to create GitLab issues.
+
+Step 1 – Find the Project
+In the Claude chat text box, enter:
+
+Can you find my project <project_name>?
+
+Replace:
+
+<project_name>
+
+with the required GitLab project name.
+
+Press Enter or select Send.
+
+17. Step 2 – Create a Test Issue
+After Claude finds the project, ask Claude to create an issue.
+
+Example prompt:
+
+Can you create an issue in the project called "Test issue from MCP server", and give it the following description: "This is a test issue created by Claude Desktop and the GitLab MCP server."
+
+Press Enter or select Send.
+
+18. Issue Creation Approval
+If the create_issue tool is configured as:
+
+Needs approval
+
+Claude will ask for permission before creating the issue.
+
+Select:
+
+Always allow
+
+or, from the dropdown list:
+
+Allow once
+
+This provides an approval/safety gate before the MCP server performs the write operation.
+
+19. Verify Created Issue
+After Claude successfully creates the issue, it provides issue details.
+
+The response includes a URL that can be used to access the created GitLab issue in the browser.
+
+This confirms that the complete flow is working:
+
+Claude Desktop
+      |
+      v
+GitLab MCP Server
+      |
+      v
+OAuth Authentication
+      |
+      v
+GitLab API
+      |
+      v
+Create Issue
+      |
+      v
+GitLab Issue Created
+
+20. Use Case 2 – Connect GitHub Copilot in VS Code
+GitHub Copilot in VS Code uses HTTP transport for a direct connection to the GitLab MCP server.
+
+This means no additional mcp-remote dependency is required for the direct HTTP connection.
+
+21. Configure GitLab MCP Server in GitHub Copilot
+Open Visual Studio Code.
+
+Open the Command Palette.
+
+macOS
+Press:
+
+Command + Shift + P
+
+Windows/Linux
+Press:
+
+Control + Shift + P
+
+Search for:
+
+MCP: Add Server
+
+and press Enter.
+
+22. Select HTTP Server Type
+For the server type, select:
+
+HTTP
+
+For the server URL, enter:
+
+https://dot-portal.de.pri.o2.com/gitlab/api/v4/mcp
+
+23. Save the MCP Configuration
+Save the configuration either:
+
+Globally/user configuration
+Workspace configuration in vscode/mcp.json
+The OAuth authorization page should then appear.
+
+24. OAuth Authorization
+In the browser:
+
+Review the authorization request.
+Approve the authorization request.
+Return to VS Code.
+Once authorized, GitHub Copilot can communicate with the GitLab MCP server.
+
+25. Check MCP Server Status in VS Code
+If the OAuth page does not appear, open the VS Code Command Palette and search for:
+
+MCP: Show MCP Dashboard
+
+Use the MCP Dashboard to:
+
+Check the MCP server status.
+Verify whether the server is connected.
+Restart the MCP server if required.
+26. VS Code Connection Troubleshooting
+If the connection fails:
+
+Step 1
+Restart the MCP server / VS Code.
+
+Step 2
+If the connection still fails, configure the GitLab MCP server in the VS Code user configuration rather than the workspace configuration.
+
+The recommended approach is to save the MCP configuration to the user/global configuration.
+
+Example configuration location:
+
+User configuration
+
+rather than:
+
+Workspace configuration
+
+The original configuration screenshots/examples are referenced in the implementation notes as:
+
+1.1
+1.2
+
+27. Test GitHub Copilot MCP Integration
+After successful OAuth authorization and MCP server connection, start a new chat in GitHub Copilot.
+
+You can then ask questions based on the available GitLab MCP tools.
+
+The same MCP capabilities can be used depending on the tools exposed to the AI client.
+
+28. Authentication and Integration Flow
+The complete authentication flow for both Claude Desktop and GitHub Copilot is:
+
+                         GitLab
+                           |
+                           |
+                    OAuth 2.0
+                           |
+                           v
+                /.well-known/*
+                           |
+                           v
+                         ALB
+                           |
+                           | Rewrite
+                           v
+                       /gitlab
+                           |
+                           v
+                  GitLab Rails / NGINX
+                           |
+                           v
+                   GitLab MCP Server
+                           |
+             +-------------+-------------+
+             |                           |
+             v                           v
+      Claude Desktop              GitHub Copilot
+             |                           |
+             +-------------+-------------+
+                           |
+                           v
+                    GitLab API
+
+The important part of the workaround is ensuring that the OAuth discovery requests to:
+
+/.well-known/oauth-authorization-server
+/.well-known/oauth-protected-resource
+
+are correctly routed to GitLab under:
+
+/gitlab
+
+29. Verified Configuration
+The following configuration has been verified for the GitLab MCP integration.
+
+GitLab MCP Endpoint
+https://dot-portal.de.pri.o2.com/gitlab/api/v4/mcp
+
+OAuth Discovery Paths
+/.well-known
+/.well-known/*
+
+NGINX Rewrite Rules
+rewrite ^(/.well-known/oauth-authorization-server)$ /gitlab$1 last;
+rewrite ^(/.well-known/oauth-protected-resource)$ /gitlab$1 last;
+
+GitLab MCP Server Version Tested
+18.11.4-ee
+
+30. Validation Result
+The Claude Desktop integration was successfully tested.
+
+Result
+Verified: Claude Desktop was connecting to the GitLab MCP Server as expected.
+
+The successful test confirmed:
+
+MCP endpoint is reachable.
+OAuth authentication works.
+OAuth discovery works with the workaround.
+Claude Desktop can establish an MCP connection.
+GitLab MCP tools are available.
+get_mcp_server_version successfully returns the server version.
+GitLab issue creation can be performed through the MCP server with appropriate approval.
+31. Important Configuration Notes
+GitLab Hosted Under /gitlab
+The GitLab instance is hosted under the subpath:
+
+/gitlab
+
+Therefore, standard OAuth/MCP discovery URLs need special handling.
+
+The external discovery paths are:
+
+/.well-known/oauth-authorization-server
+/.well-known/oauth-protected-resource
+
+The NGINX rewrite rules map them to the corresponding GitLab /gitlab paths.
+
+ALB Configuration
+The ALB must allow the following:
+
+/.well-known
+/.well-known/*
+
+Without these listener rules, external AI clients may not be able to discover the OAuth endpoints correctly.
+
+Rails Configuration
+The workaround must be applied to both GitLab Rails servers.
+
+After modifying gitlab.rb, run:
+
+gitlab-ctl reconfigure
+
+on both Rails servers.
+
+32. Troubleshooting Guide
+Problem: OAuth Page Does Not Appear
+Check:
+
+ALB listener rules.
+/.well-known path.
+/.well-known/* path.
+NGINX rewrite configuration.
+gitlab-ctl reconfigure has been executed.
+Configuration has been applied on both Rails servers.
+MCP endpoint is reachable.
+Problem: Claude Desktop Cannot Connect
+Check:
+
+Node.js version is 20 or later.
+Node.js is available in PATH.
+Verify:
+which -a node
+
+Verify the claude_desktop_config.json configuration.
+Verify the GitLab MCP endpoint.
+Restart Claude Desktop.
+Complete the OAuth authorization flow.
+Check:
+Settings > Developer
+
+Check:
+Settings > Connectors
+
+Problem: GitHub Copilot Cannot Connect
+Try the following:
+
+Restart VS Code.
+Open:
+MCP: Show MCP Dashboard
+
+Check the MCP server status.
+Verify the HTTP MCP endpoint.
+Re-run OAuth authorization.
+If the problem persists, save the MCP configuration to the user/global VS Code configuration instead of the workspace configuration.
+Problem: MCP Tools Are Not Available
+Verify:
+
+OAuth authorization completed successfully.
+MCP server shows as connected.
+The correct MCP endpoint is configured.
+The AI client has been restarted after configuration changes.
+The GitLab MCP server is responding.
+Use:
+
+What version of the GitLab MCP server am I connected to?
+
+If the response returns:
+
+18.11.4-ee
+
+the MCP connection is active.
+
+33. Official Documentation / References
+The following documentation should be used as the official reference material for this implementation:
+
+GitLab MCP Server documentation for 18.11
+Claude Desktop documentation for configuring Claude Desktop with the MCP Server
+GitHub Copilot documentation for configuring GitHub Copilot in VS Code with the GitLab MCP Server
+MCP Server troubleshooting documentation
+34. GitLab Support Tickets
+OAuth / MCP Discovery Workaround
+GitLab Support ticket:
+
+#728398
+
+This ticket is associated with the workaround for the OAuth/MCP discovery endpoints when GitLab is hosted under a subpath behind the ALB.
+
+Duo Agentic Discussion
+The vendor has agreed to continue the discussion regarding Duo Agentic in:
+
+GitLab Support ticket #727186
+
+This ticket is already in progress.
+
+35. Related Dot Story
+DOT-6505 – Authenticate to see issue details
+
+This story tracks the GitLab MCP / AI client integration work.
+
+DOT-6505
+
+36. End-to-End Validation Checklist
+Before considering the MCP integration complete, verify the following:
+
+ GitLab is reachable through the expected /gitlab subpath.
+ /.well-known ALB listener rule exists.
+ /.well-known/* ALB listener rule exists.
+ NGINX rewrite rules have been added to gitlab.rb.
+ Configuration has been applied to Rails server 1.
+ Configuration has been applied to Rails server 2.
+ gitlab-ctl reconfigure completed successfully.
+ GitLab MCP endpoint is reachable.
+ OAuth authorization page opens.
+ OAuth authorization succeeds.
+ Claude Desktop connects successfully.
+ GitHub Copilot can connect through HTTP transport.
+ get_mcp_server_version returns the expected version.
+ MCP tools are visible.
+ Read operations such as get_issue work.
+ Write operations such as create_issue work with approval.
+ Created GitLab issues can be opened from the returned URL.
+ MCP Dashboard in VS Code shows the server as connected.
+37. Quick Reference
+Item	Value
+GitLab MCP Endpoint	https://dot-portal.de.pri.o2.com/gitlab/api/v4/mcp
+GitLab Subpath	/gitlab
+OAuth Discovery Path	/.well-known/oauth-authorization-server
+Protected Resource Path	/.well-known/oauth-protected-resource
+ALB Path 1	/.well-known
+ALB Path 2	/.well-known/*
+Rails Configuration	gitlab.rb
+Reconfigure Command	gitlab-ctl reconfigure
+GitLab Support Ticket	#728398
+Duo Agentic Ticket	#727186
+Dot Story	DOT-6505
+Tested MCP Version	18.11.4-ee
+Claude Transport	mcp-remote
+GitHub Copilot Transport	HTTP
+Minimum Node.js Version	20
+
+38. Final Summary
+The GitLab MCP integration required an additional routing workaround because the GitLab instance is hosted under the /gitlab subpath behind an AWS ALB.
+
+The implementation requires both:
+
+NGINX rewrite rules on the GitLab Rails servers, and
+ALB listener rules for /.well-known and /.well-known/*.
+Once these changes are applied, external AI clients can successfully complete OAuth discovery and authenticate against the GitLab MCP server.
+
+The integration was successfully verified with Claude Desktop, including:
+
+OAuth authentication
+MCP server connection
+get_mcp_server_version
+GitLab issue lookup
+GitLab issue creation
+
+GitHub Copilot in VS Code can connect directly using HTTP transport, with the recommendation to use the user/global MCP configuration if workspace-level configuration causes connection problems.
+
+This setup provides AI clients with authenticated access to GitLab functionality through the MCP server while maintaining OAuth authorization and approval controls for operations that modify GitLab resources.
+
+You can place this after the Terraform deployment/troubleshooting section in the same README.md, or keep it as a separate MCP.md/GITLAB-MCP.md if you want the repository README to remain shorter.
+
+
+
+ChatGPT is AI and can make mistakes.
+
