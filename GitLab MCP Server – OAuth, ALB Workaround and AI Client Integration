@@ -1,8 +1,4 @@
 GitLab MCP Server – OAuth, ALB Workaround and AI Client Integration
-Created by: nirupa bj
-Last updated by: Nazia Mazhar
-Last updated: July 31, 2026
-Estimated reading time: 5 minutes
 
 1. Overview
 This document describes the workaround required to enable the GitLab MCP Server integration with external AI clients such as:
