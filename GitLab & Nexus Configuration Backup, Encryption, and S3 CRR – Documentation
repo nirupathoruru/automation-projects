@@ -1,0 +1,456 @@
+This page documents the backup process for GitLab and Nexus configuration files in Prod Environment, including encryption, S3 upload, replication validation, and decryption steps.
+
+
+
+Overview
+GitLab and Nexus configuration backups are automated using shell scripts that:
+
+Package configuration files into a .tar.gz archive
+
+Encrypt the archive using OpenSSL AES‑256‑CBC
+
+Upload the encrypted file to Amazon S3
+
+Support cross‑region replication (CRR)
+
+Allow secure restoration using AWS Secrets Manager
+
+
+
+High-level flow
+
+ 
+ Cron (6 AM CET)
+   ↓
+Backup script on EC2
+   ↓
+Collect GitLab config files
+   ↓
+Create archive (.tar.gz)
+   ↓
+Encrypt archive with password
+   ↓
+Upload encrypted file to S3 (Frankfurt)
+   ↓
+S3 CRR replicates to Paris
+
+
+
+2. S3 Bucket Structure
+Account-ID: 096603248035
+
+
+
+s3-crr-frankfurt/
+ └── frankfurt-config/
+      ├── gitlab-node-backups/
+      └── nexus-eks-backups/
+
+s3-crr-paris/
+ └── paris-config/
+      ├── gitlab-node-backups/
+      └── nexus-eks-backups/
+
+Backup Content
+
+The following GitLab and system configuration files are backed up for Gitlab backups:
+
+/etc/gitlab/gitlab-secrets.json
+/etc/gitlab/gitlab.rb
+/etc/gitlab/ssl/*
+/etc/gitlab/trusted-certs/*
+/etc/ssh/ssh_host_*_key*
+/etc/fstab
+
+
+
+The following configuration files are backed up for Nexus backups:
+
+"/opt/helm-charts/nexus/nxrm-ha-3.81.1/values.yaml"
+  "/opt/helm-charts/nexus/nxrm-ha-3.81.1/nexus-sc.yaml"
+  "/opt/helm-charts/nexus/nxrm-ha-3.81.1/nexus-pv.yaml"
+  "/opt/helm-charts/nexus/nxrm-ha-3.81.1/nexus-pvc.yaml"
+  "/opt/helm-charts/nexus/nxrm-ha-3.81.1/nexus-docker-tgb.yaml"
+  "/opt/helm-charts/nexus/nxrm-ha-3.81.1/nexus-tgb.yaml"
+
+
+
+3. Prerequisites
+
+
+AWS CLI	Installed and configured on the host
+IAM Permissions	s3:PutObject, s3:GetObject, secretsmanager:GetSecretValue
+Secrets Manager	Secret containing encryption password
+OpenSSL	Required for encryption/decryption
+S3 Buckets	Frankfurt + Paris CRR buckets
+
+
+IAM role arn-
+arn:aws:iam::096603248035:role/raitt-platform-instance-profile
+
+Policy- s3-crr-policy
+
+4. Script Execution
+gitlab__backup_to_s3_checksum.sh
+
+
+#!/bin/bash
+set -euo pipefail
+
+# ================= CONFIG =================
+GitLab_Node="Prod-Rails-2" ## add node name here
+friendlyname="$(hostname -s)"
+
+BASE_DIR="/home/alm-gitlab-bkp"
+S3_BUCKET="s3--crr-frankfurt"
+S3_PREFIX="frankfurt-config/gitlab-node-backups"
+S3_REGION="eu-central-1"
+
+SECRETS_REGION="eu-central-1"
+SECRET_NAME="gitlab-file-encryption-password"
+
+CHECKSUM_FILE="$BASE_DIR/last-backup.checksum"
+
+# ================= CHECK FOR CHANGES =================
+echo "Checking for changes in GitLab configuration files..."
+
+CURRENT_SUM=$(tar -cf - \
+  /etc/gitlab/gitlab.rb \
+  /etc/gitlab/gitlab-secrets.json \
+  /etc/gitlab/ssl \
+  /etc/gitlab/trusted-certs \
+  /etc/ssh/ssh_host_*_key* \
+  /etc/fstab \
+  2>/dev/null | sha256sum | awk '{print $1}')
+
+if [[ -f "$CHECKSUM_FILE" ]]; then
+    LAST_SUM=$(cat "$CHECKSUM_FILE")
+
+    if [[ "$CURRENT_SUM" == "$LAST_SUM" ]]; then
+        echo "No changes detected. Skipping backup."
+        exit 0
+    fi
+fi
+
+echo "Changes detected — proceeding with backup."
+
+# ================= CONTINUE WITH BACKUP =================
+myDate=$(date '+%Y-%m-%d_%H-%M-%S')
+bkp_dir="${GitLab_Node}_${myDate}__${friendlyname}"
+BACKUP_PATH="$BASE_DIR/$bkp_dir"
+
+ARCHIVE="$BASE_DIR/${bkp_dir}.tar.gz"
+ENCRYPTED_ARCHIVE="${ARCHIVE}.enc"
+
+# ================= CREATE DIRECTORIES =================
+mkdir -p "$BACKUP_PATH/gitLab" "$BACKUP_PATH/ssl" "$BACKUP_PATH/trusted-certs" "$BACKUP_PATH/ssh" "$BACKUP_PATH/fstab"
+
+# ================= COPY FILES =================
+cp -p /etc/gitlab/gitlab-secrets.json "$BACKUP_PATH/gitLab/"
+cp -p /etc/gitlab/gitlab.rb "$BACKUP_PATH/gitLab/"
+cp -p /etc/fstab "$BACKUP_PATH/fstab/"
+cp -pr /etc/gitlab/ssl "$BACKUP_PATH/"
+cp -pr /etc/gitlab/trusted-certs "$BACKUP_PATH/"
+cp -pr /etc/ssh/ssh_host_*_key* "$BACKUP_PATH/ssh/"
+
+# ================= CREATE ARCHIVE =================
+tar -czvf "$ARCHIVE" -C "$BASE_DIR" "$bkp_dir"
+
+# ================= FETCH PASSWORD =================
+export no_proxy="169.254.169.254"
+export https_proxy=http://10.169.127.8:8080/
+export http_proxy=http://10.169.127.8:8080/
+
+PASSWORD=$(/usr/local/bin/aws secretsmanager get-secret-value \
+  --region "$SECRETS_REGION" \
+  --secret-id "$SECRET_NAME" \
+  --query SecretString \
+  --output text)
+
+# ================= ENCRYPT ARCHIVE =================
+printf "%s" "$PASSWORD" | openssl enc -aes-256-cbc -pbkdf2 -salt \
+  -in "$ARCHIVE" \
+  -out "$ENCRYPTED_ARCHIVE" \
+  -pass stdin
+
+unset PASSWORD
+
+# ================= UPLOAD TO S3 =================
+/usr/local/bin/aws s3 cp "$ENCRYPTED_ARCHIVE" \
+  "s3://$S3_BUCKET/$S3_PREFIX/$(basename "$ENCRYPTED_ARCHIVE")" \
+  --region "$S3_REGION"
+
+echo "GitLab backup completed successfully: $(basename "$ENCRYPTED_ARCHIVE")"
+
+# ================= SAVE NEW CHECKSUM =================
+echo "$CURRENT_SUM" > "$CHECKSUM_FILE"
+
+
+decrypt_s3_file.sh
+
+
+#!/bin/bash
+set -euo pipefail
+
+# ================= CONFIG =================
+S3_BUCKET="s3--crr-frankfurt"   # Test ENV s3 bucket name- s3-crr-frankfurt
+S3_PREFIX="frankfurt-config/gitlab-node-backups"
+S3_REGION="eu-central-1"
+
+SECRETS_REGION="eu-central-1"
+SECRET_NAME="gitlab-file-encryption-password"
+
+# ================= INPUT CHECK =================
+if [[ $# -ne 1 ]]; then
+    echo "Usage: $0 <encrypted-backup-file-name.enc>"
+    echo "Example:"
+    echo "  $0 Test-Rails-2_2026-01-08_08-16-01__ip-10-110-108-24.tar.gz.enc"
+    exit 1
+fi
+
+ENCRYPTED_FILE="$1"
+LOCAL_ENC_FILE="$(basename "$ENCRYPTED_FILE")"
+DECRYPTED_FILE="${LOCAL_ENC_FILE%.enc}"
+
+echo "Downloading encrypted backup from S3..."
+/usr/local/bin/aws s3 cp \
+  "s3://${S3_BUCKET}/${S3_PREFIX}/${LOCAL_ENC_FILE}" \
+  "./${LOCAL_ENC_FILE}" \
+  --region "$S3_REGION"
+
+export no_proxy="169.254.169.254"
+export https_proxy=http://10.169.127.8:8080/
+export http_proxy=http://10.169.127.8:8080/
+
+echo "Fetching decryption password from AWS Secrets Manager..."
+PASSWORD=$(/usr/local/bin/aws secretsmanager get-secret-value \
+  --region "$SECRETS_REGION" \
+  --secret-id "$SECRET_NAME" \
+  --query SecretString \
+  --output text)
+
+echo "Decrypting backup..."
+printf "%s" "$PASSWORD" | openssl enc -d -aes-256-cbc -pbkdf2 \
+  -in "$LOCAL_ENC_FILE" \
+  -out "$DECRYPTED_FILE" \
+  -pass stdin
+
+unset PASSWORD
+
+echo "Extracting decrypted archive..."
+tar -xzvf "$DECRYPTED_FILE"
+
+echo "Decryption and extraction complete."
+echo "Backup directory restored from: $DECRYPTED_FILE"
+
+
+awscli_install.sh
+
+
+#!/bin/bash
+
+set -e
+
+# -----------------------------
+# AWS CLI Installation Script
+# -----------------------------
+
+# Configure proxy (if required)
+export https_proxy="http://10.169.127.8:8080/"
+export http_proxy="http://10.169.127.8:8080/"
+
+echo "Downloading AWS CLI..."
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+
+echo "Unzipping package..."
+unzip -o awscliv2.zip
+
+echo "Installing AWS CLI to /opt/aws-cli..."
+chmod +x aws
+sudo ./aws/install --install-dir /opt/aws-cli --bin-dir /usr/local/bin
+
+echo "Fixing SELinux labels..."
+sudo restorecon -R -v /opt/aws-cli
+
+echo "Verifying installation..."
+/usr/local/bin/aws --version
+
+echo "AWS CLI installation completed successfully."
+
+
+4.1 Make Scripts Executable
+chmod +x gitlab__backup_to_s3_checksum.sh
+chmod +x nexus_config_backup_to_s3.sh
+chmod +x decrypt_s3_file.sh
+
+
+
+4.2 Run GitLab Backup
+
+./gitlab__backup_to_s3_checksum.sh
+
+
+4.3 Run Nexus Backup
+
+./nexus_config_backup_to_s3.sh
+
+5. Backup Workflow
+1	Collect GitLab/Nexus configuration files
+2	Create a .tar.gz archive containing the configuration backup
+3	Retrieve encryption password securely from AWS Secrets Manager
+4	Encrypt the archive using OpenSSL with the retrieved password
+5	Upload the encrypted .enc file to the S3 bucket
+6	Cross‑Region Replication (CRR) automatically copies the encrypted file to the DR region
+7	Use the decrypt script to download, decrypt, and extract the backup when needed
+6. Restore / Decrypt Backup
+6.1 Run Decrypt Script
+
+
+./decrypt_s3_file.sh s3://s3-crr-frankfurt/frankfurt-config/gitlab-node-backups/<file>.enc
+
+The script will:
+
+Download encrypted file
+
+Fetch password from Secrets Manager
+
+Decrypt using OpenSSL
+
+Extract the archive
+
+7. Manual Validation Commands
+7.1 S3 Access Validation
+
+
+List S3 buckets	aws s3 ls
+Upload test file	aws s3 cp /etc/hosts s3://s3-crr-frankfurt/test/hosts
+Verify CRR replication	aws s3 ls s3://s3-crr-paris/test/
+
+
+8. Troubleshooting
+8.1 Common Issues
+
+
+AWS CLI not found	which aws → expected /usr/local/bin/
+Secrets Manager timeout	Configure proxy (see below)
+403 Forbidden on S3	Check bucket name, IAM permissions, prefix
+Decryption fails	Ensure encryption used -pbkdf2 and correct password
+Replication missing	Validate CRR rules and IAM role
+
+ 
+
+8.2 Proxy Settings for Secrets Manager
+
+If Secrets Manager or IMDS calls hang:
+
+export no_proxy="169.254.169.254"
+export https_proxy=http://10.169.127.8:8080/
+export http_proxy=http://10.169.127.8:8080/
+
+9. Lifecycle Policy Recommendations
+Current versions	Keep in S3 Standard (no transitions)
+Noncurrent versions	Delete after 180 days
+Cleanup	Delete expired delete markers; abort incomplete uploads after 7 days
+CRR Rule Configuration For Nexus and Gitlab
+
+
+
+
+GitLab/Nexus  Configuration Deployment using Ansible:
+
+Below is sample example for gitlab conf deployment-
+
+
+ansible/
+
+├── gitlab-ci.yaml
+├── inventory/
+│   └── production (here we'll store remote servers/host details of gitlab-rails, gitaly,preafect)
+├── group_vars/  (here we'll store and Update relevant variables)
+│   ├── rails.yml
+│   ├── gitaly.yml
+│   └── praefect.yml
+├── roles/
+│   └── configure-gitlab/
+│       ├── tasks/
+│       │   └── main.yml
+│       ├── templates/
+│       │   ├── rails.rb.j2
+│       │   ├── gitaly.rb.j2
+│       │   └── praefect.rb.j2
+│       ├── handlers/
+│       │   └── main.yml
+│       └── vars/ (optional)
+└── playbooks/
+    └── deploy.yml
+
+
+
+All gitlab.rb configurations are version-controlled in Git and updated through feature branches and merge requests. Once approved and merged into the main branch, a CI/CD pipeline automatically deploys the changes using Ansible to the appropriate GitLab nodes (Rails, Gitaly, and Praefect). This ensures consistent, auditable, and automated configuration management across the GitLab infrastructure.
+
+Note- Ansible is already installed on Prod 142 server & Test 140 server. So to implement this we have to register a gitlab runner in same nodes.
+
+Deployment Procedure
+Create Change
+
+Create a feature branch from main
+
+Update:
+
+Node-specific template (rails.rb.j2, gitaly.rb.j2, praefect.rb.j2)
+
+Corresponding variables in group_vars
+
+Submit for Review
+
+Open a Merge Request (MR) targeting main
+
+Ensure required reviewers approve the change
+
+Merge Change
+
+Merge the MR after approval
+
+Do not squash or bypass review controls
+
+Pipeline Execution
+
+GitLab CI/CD pipeline triggers automatically on merge 
+
+Pipeline runs:
+ 
+ansible-playbook -i inventory/production playbooks/deploy.yml
+
+Configuration Deployment
+
+Ansible selects the correct template based on host group
+
+Renders and copies gitlab.rb to /etc/gitlab/gitlab.rb
+
+Apply Configuration
+
+Handler executes:
+
+gitlab-ctl reconfigure
+
+Configuration is applied on affected nodes
+
+NOTE:  Proposed Solution.
+
+For versioning controlling changes we are planning to have GitLab GET Tool Instead of Ansible. Refer- DOT-6406 - Authenticate to see issue details
+
+GitLab GET tool (GitLab Environment Toolkit) is designed to help automate the deployment and management of GitLab environments. It integrates primarily with:
+
+Terraform – for Infrastructure as Code (IaC) to provision and manage cloud resources.
+Ansible – for configuration management and orchestration (though you mentioned replacing Ansible, GET originally uses it for GitLab setup).
+
+
+
+
+User story-
+DOT-6411 - Authenticate to see issue details
+
+
+
+
+
