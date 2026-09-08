@@ -1,8 +1,8 @@
 This is a strong DevOps/SRE interview project because it combines backup automation, AWS, security, DR, Linux scripting, S3 CRR, IAM, Secrets Manager, and configuration management with Ansible.
-
 Below is a version you can use to prepare and speak about the project in an interview. I’ve structured it so you can first give a 1–2 minute overview, then go deeper if the interviewer asks.
 
 1. Project Introduction — 1–2 Minute Answer
+
 “I worked on implementing an automated configuration backup and disaster recovery solution for GitLab and Nexus in the production environment.
 
 The main objective was to make sure critical configuration files were securely backed up and available in a separate AWS region in case of a production failure or regional outage.
